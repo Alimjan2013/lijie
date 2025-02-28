@@ -1,7 +1,8 @@
 "use client"
 
+import type React from "react"
+
 import { useState } from "react"
-import { supabase } from "@/utils/supabase"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -27,33 +28,69 @@ interface PictureSetFormProps {
   onSubmit: (pictureSet: PictureSet) => void
 }
 
-// Updated helper function with crossOrigin support
-async function compressImage(file: File, quality: number = 0.88): Promise<File> {
+// Updated compression function with max dimension constraint
+async function compressImage(file: File, maxDimension = 1080, quality = 0.88): Promise<File> {
   return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.crossOrigin = "anonymous"; // Allow cross-origin usage for local file
-    image.src = URL.createObjectURL(file);
+    const image = new Image()
+    image.crossOrigin = "anonymous"
+    image.src = URL.createObjectURL(file)
+
     image.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = image.width;
-      canvas.height = image.height;
-      const context = canvas.getContext("2d");
-      if (!context) {
-        reject(new Error("Canvas context not available"));
-        return;
+      // Calculate new dimensions
+      let width = image.width
+      let height = image.height
+
+      // Resize if necessary while maintaining aspect ratio
+      if (width > height && width > maxDimension) {
+        height = Math.round(height * (maxDimension / width))
+        width = maxDimension
+      } else if (height > width && height > maxDimension) {
+        width = Math.round(width * (maxDimension / height))
+        height = maxDimension
+      } else if (width === height && width > maxDimension) {
+        width = maxDimension
+        height = maxDimension
       }
-      context.drawImage(image, 0, 0);
-      canvas.toBlob((blob) => {
-        if (!blob) {
-          reject(new Error("Compression failed"));
-          return;
-        }
-        const compressedFile = new File([blob], file.name.replace(/\.[^/.]+$/, ".webp"), { type: "image/webp" });
-        resolve(compressedFile);
-      }, "image/webp", quality);
-    };
-    image.onerror = (err) => reject(err);
-  });
+
+      // Create canvas with new dimensions
+      const canvas = document.createElement("canvas")
+      canvas.width = width
+      canvas.height = height
+
+      const context = canvas.getContext("2d")
+      if (!context) {
+        reject(new Error("Canvas context not available"))
+        return
+      }
+
+      // Draw resized image
+      context.drawImage(image, 0, 0, width, height)
+
+      // Convert to WebP
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            reject(new Error("Compression failed"))
+            return
+          }
+          const compressedFile = new File([blob], file.name.replace(/\.[^/.]+$/, ".webp"), {
+            type: "image/webp",
+          })
+
+          // Clean up
+          URL.revokeObjectURL(image.src)
+          resolve(compressedFile)
+        },
+        "image/webp",
+        quality,
+      )
+    }
+
+    image.onerror = (err) => {
+      URL.revokeObjectURL(image.src)
+      reject(err)
+    }
+  })
 }
 
 export function PictureSetForm({ onSubmit }: PictureSetFormProps) {
@@ -73,40 +110,40 @@ export function PictureSetForm({ onSubmit }: PictureSetFormProps) {
         objectName,
         contentType: file.type,
       }),
-    });
-    if (!res.ok) throw new Error("Failed to get signed URL");
-    const { uploadUrl } = await res.json();
-    const fileBuffer = await file.arrayBuffer();
+    })
+    if (!res.ok) throw new Error("Failed to get signed URL")
+    const { uploadUrl } = await res.json()
+    const fileBuffer = await file.arrayBuffer()
     const uploadRes = await fetch(uploadUrl, {
       method: "PUT",
       headers: { "Content-Type": file.type },
       body: fileBuffer,
-    });
-    if (!uploadRes.ok) throw new Error("File upload failed");
-    return `https://pub-aa03052e73cc405b9b70dc0fc8aeb455.r2.dev/${objectName}`;
-  };
+    })
+    if (!uploadRes.ok) throw new Error("File upload failed")
+    return `https://pub-aa03052e73cc405b9b70dc0fc8aeb455.r2.dev/${objectName}`
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
+    e.preventDefault()
+    setIsSubmitting(true)
 
     try {
-      let cover_image_url = "";
+      let cover_image_url = ""
       if (cover) {
         // Compress cover image to WebP before upload
-        const compressedCover = await compressImage(cover, 0.88);
-        const objectName = `picture/cover-${Date.now()}-${compressedCover.name}`;
-        cover_image_url = await uploadFile(compressedCover, objectName);
+        const compressedCover = await compressImage(cover, 1080)
+        const objectName = `picture/cover-${Date.now()}-${compressedCover.name}`
+        cover_image_url = await uploadFile(compressedCover, objectName)
       }
 
       // Process pictures: compress and upload each file if available
       const processedPictures = await Promise.all(
         pictures.map(async (picture, idx) => {
-          let image_url = "";
+          let image_url = ""
           if (picture.cover instanceof File) {
-            const compressedPicture = await compressImage(picture.cover, 0.88);
-            const objectName = `picture/picture-${Date.now()}-${idx}-${compressedPicture.name}`;
-            image_url = await uploadFile(compressedPicture, objectName);
+            const compressedPicture = await compressImage(picture.cover, 1080)
+            const objectName = `picture/picture-${Date.now()}-${idx}-${compressedPicture.name}`
+            image_url = await uploadFile(compressedPicture, objectName)
           }
           return {
             title: picture.title,
@@ -114,9 +151,9 @@ export function PictureSetForm({ onSubmit }: PictureSetFormProps) {
             description: picture.description,
             cover: null,
             image_url, // use image_url key for database insertion
-          };
-        })
-      );
+          }
+        }),
+      )
 
       const newPictureSet = {
         title,
@@ -124,14 +161,14 @@ export function PictureSetForm({ onSubmit }: PictureSetFormProps) {
         description,
         cover_image_url,
         pictures: processedPictures,
-      };
+      }
 
-      onSubmit(newPictureSet);
-      resetForm();
+      onSubmit(newPictureSet)
+      resetForm()
     } catch (error) {
-      console.error("Error submitting picture set:", error);
+      console.error("Error submitting picture set:", error)
     } finally {
-      setIsSubmitting(false);
+      setIsSubmitting(false)
     }
   }
 
